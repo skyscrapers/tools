@@ -1,0 +1,86 @@
+#!/bin/bash
+
+#################
+#
+# This is a helper script to run Terraform on Skyscrapers managed configuration.
+#
+# It's just a wrapper of the normal `terraform` binary, and it's specially usefull when running Terraform on [standard stacks](https://github.com/skyscrapers/documentation/blob/master/coding_guidelines/terraform.md#standard-stack).
+#
+#   - When the $TF_STACK_PATH environment variable is set to a directory containing Terraform configuration files, `tf` will automatically use them when running `terraform`. This script now supports all terraform subcommands.
+#   - `tf` will automatically load Terraform var files from the both the customer repo root directory and the current directory. It'll use the current terraform workspace name to load the corresponding var files.
+#   - When running `init`, `tf` will automatically load any `backend-config.tfvars` files it can find in both the customer repo root directory and the current directory.
+#
+#################
+
+set -e
+
+# Try to figure out if we're in a Skyscrapers "customer" repo with a terraform folder
+if [ -x "$(command -v git)" ]; then
+  CUSTOMER_ROOT=$(git rev-parse --show-toplevel 2> /dev/null)
+  retval=$?
+  if [ $retval -eq 0 -a -d "$CUSTOMER_ROOT/terraform" ]; then
+    TF_ROOT="$CUSTOMER_ROOT/terraform"
+  fi
+fi
+
+TF_WORKSPACE=$(terraform workspace show 2> /dev/null)
+
+>&2 echo "Using Terraform workspace $TF_WORKSPACE"
+
+CHDIR=""
+if [ ! -z "$TF_STACK_PATH" ]; then
+  >&2 echo "Using Terraform stack $TF_STACK_PATH"
+  CHDIR="-chdir=$TF_STACK_PATH"
+else
+  >&2 echo "TF_STACK_PATH not set, using Terraform configuration in PWD"
+fi
+
+# Check if it's init command and backend config not provided
+ADDITIONAL_ARGS=""
+if [[ "$1" == "init" && ! " $@ " =~ " -backend-config" ]]; then
+  if [[ -f "$TF_ROOT/backend_config.tfvars" ]]; then
+    >&2 echo "Automatically adding additional backend config file $TF_ROOT/backend_config.tfvars"
+    ADDITIONAL_ARGS="$ADDITIONAL_ARGS -backend-config=$TF_ROOT/backend_config.tfvars"
+  fi
+
+  if [[ -f "$PWD/backend_config.tfvars" ]]; then
+    >&2 echo "Automatically adding additional backend config file $PWD/backend_config.tfvars"
+    ADDITIONAL_ARGS="$ADDITIONAL_ARGS -backend-config=$PWD/backend_config.tfvars"
+  fi
+fi
+
+# Check if is's a command that needs vars
+if [[ "$1" =~ ^(plan|apply|refresh|import|destroy)$ ]]; then
+  if [[ -f "$TF_ROOT/common.tfvars" ]]; then
+    >&2 echo "Automatically adding additional var file $TF_ROOT/common.tfvars"
+    ADDITIONAL_ARGS="$ADDITIONAL_ARGS -var-file=$TF_ROOT/common.tfvars"
+  fi
+
+  if [[ -f "$TF_ROOT/$TF_WORKSPACE.tfvars" ]]; then
+    >&2 echo "Automatically adding additional var file $TF_ROOT/$TF_WORKSPACE.tfvars"
+    ADDITIONAL_ARGS="$ADDITIONAL_ARGS -var-file=$TF_ROOT/$TF_WORKSPACE.tfvars"
+  fi
+
+  if [[ -f "$PWD/common.tfvars" ]]; then
+    >&2 echo "Automatically adding additional var file $PWD/common.tfvars"
+    ADDITIONAL_ARGS="$ADDITIONAL_ARGS -var-file=$PWD/common.tfvars"
+  fi
+
+  if [[ -f "$PWD/$TF_WORKSPACE.tfvars" ]]; then
+    >&2 echo "Automatically adding additional var file $PWD/$TF_WORKSPACE.tfvars"
+    ADDITIONAL_ARGS="$ADDITIONAL_ARGS -var-file=$PWD/$TF_WORKSPACE.tfvars"
+  fi
+fi
+
+if [[ "$1" == "import" ]]; then
+  # Import has a special consideration as arguments need to go before the resource path and ID
+  shift
+  command="terraform $CHDIR import $ADDITIONAL_ARGS $@"
+else
+  command="terraform $CHDIR $@ $ADDITIONAL_ARGS"
+fi
+
+>&2 echo Running terraform: $command
+>&2 echo
+
+eval TF_DATA_DIR="$PWD/.terraform" "$command"
