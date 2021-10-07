@@ -15,6 +15,13 @@ These are the main two features of the helper script:
 
 See the description in the script for more information.
 
+You can install it with:
+
+```bash
+brew tap skyscrapers/tap
+brew install tf
+```
+
 Examples:
 
 ```shell
